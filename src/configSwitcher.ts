@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 export const CONFIG_TARGET = "config.json";
+export const CONFIG_EXTENSION_SECTION = "configSwitcher";
 
 export const CONFIG_KIND = {
   DEV: "dev",
@@ -16,6 +17,12 @@ export interface ConfigFileState {
   local: boolean;
 }
 
+export interface ConfigPaths {
+  devConfigPath: string;
+  localConfigPath: string;
+  targetConfigPath: string;
+}
+
 export interface RuntimeConfigApi {
   baseUri?: unknown;
 }
@@ -24,21 +31,28 @@ export interface RuntimeConfig {
   api: RuntimeConfigApi;
 }
 
-const SOURCE_FILE_BY_KIND: Record<ConfigKind, string> = {
-  [CONFIG_KIND.DEV]: "config.dev.json",
-  [CONFIG_KIND.LOCAL]: "config.local.json",
+export const DEFAULT_CONFIG_PATHS: ConfigPaths = {
+  devConfigPath: "public/config.dev.json",
+  localConfigPath: "public/config.local.json",
+  targetConfigPath: "public/config.json",
 };
 
-export function getPublicDir(workspaceFolder: string): string {
-  return path.join(workspaceFolder, "public");
+export function getConfigSourcePath(
+  workspaceFolder: string,
+  kind: ConfigKind,
+  configPaths: ConfigPaths = DEFAULT_CONFIG_PATHS,
+): string {
+  return resolveWorkspaceFilePath(
+    workspaceFolder,
+    kind === CONFIG_KIND.DEV ? configPaths.devConfigPath : configPaths.localConfigPath,
+  );
 }
 
-export function getConfigSourcePath(workspaceFolder: string, kind: ConfigKind): string {
-  return path.join(getPublicDir(workspaceFolder), SOURCE_FILE_BY_KIND[kind]);
-}
-
-export function getConfigTargetPath(workspaceFolder: string): string {
-  return path.join(getPublicDir(workspaceFolder), CONFIG_TARGET);
+export function getConfigTargetPath(
+  workspaceFolder: string,
+  configPaths: ConfigPaths = DEFAULT_CONFIG_PATHS,
+): string {
+  return resolveWorkspaceFilePath(workspaceFolder, configPaths.targetConfigPath);
 }
 
 export async function fileExists(filePath: string): Promise<boolean> {
@@ -54,17 +68,23 @@ export async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function detectConfigFiles(workspaceFolder: string): Promise<ConfigFileState> {
+export async function detectConfigFiles(
+  workspaceFolder: string,
+  configPaths: ConfigPaths = DEFAULT_CONFIG_PATHS,
+): Promise<ConfigFileState> {
   const [dev, local] = await Promise.all([
-    fileExists(getConfigSourcePath(workspaceFolder, CONFIG_KIND.DEV)),
-    fileExists(getConfigSourcePath(workspaceFolder, CONFIG_KIND.LOCAL)),
+    fileExists(getConfigSourcePath(workspaceFolder, CONFIG_KIND.DEV, configPaths)),
+    fileExists(getConfigSourcePath(workspaceFolder, CONFIG_KIND.LOCAL, configPaths)),
   ]);
 
   return { dev, local };
 }
 
-export async function detectCurrentConfigKind(workspaceFolder: string): Promise<ConfigKind> {
-  const targetPath = getConfigTargetPath(workspaceFolder);
+export async function detectCurrentConfigKind(
+  workspaceFolder: string,
+  configPaths: ConfigPaths = DEFAULT_CONFIG_PATHS,
+): Promise<ConfigKind> {
+  const targetPath = getConfigTargetPath(workspaceFolder, configPaths);
 
   if (!(await fileExists(targetPath))) {
     return CONFIG_KIND.DEV;
@@ -81,13 +101,18 @@ export function getToggleTargetKind(currentKind: ConfigKind): ConfigKind {
   return currentKind === CONFIG_KIND.LOCAL ? CONFIG_KIND.DEV : CONFIG_KIND.LOCAL;
 }
 
-export async function switchConfig(workspaceFolder: string, kind: ConfigKind): Promise<void> {
-  const sourcePath = getConfigSourcePath(workspaceFolder, kind);
-  const publicDir = getPublicDir(workspaceFolder);
-  const targetPath = getConfigTargetPath(workspaceFolder);
-  const tempPath = path.join(publicDir, `.config.${process.pid}.${randomUUID()}.tmp`);
+export async function switchConfig(
+  workspaceFolder: string,
+  kind: ConfigKind,
+  configPaths: ConfigPaths = DEFAULT_CONFIG_PATHS,
+): Promise<void> {
+  const sourcePath = getConfigSourcePath(workspaceFolder, kind, configPaths);
+  const targetPath = getConfigTargetPath(workspaceFolder, configPaths);
+  const targetDir = path.dirname(targetPath);
+  const tempPath = path.join(targetDir, `.config.${process.pid}.${randomUUID()}.tmp`);
 
-  await ensureSafePublicDir(publicDir);
+  await ensureSafeDirectory(path.dirname(sourcePath));
+  await ensureSafeDirectory(targetDir);
 
   if (!(await isRegularFile(sourcePath))) {
     throw new Error(`Missing source config: ${path.relative(workspaceFolder, sourcePath)}`);
@@ -106,6 +131,26 @@ export async function switchConfig(workspaceFolder: string, kind: ConfigKind): P
   }
 }
 
+function resolveWorkspaceFilePath(workspaceFolder: string, relativeFilePath: string): string {
+  if (!relativeFilePath.trim()) {
+    throw new Error("Config paths cannot be empty.");
+  }
+
+  if (path.isAbsolute(relativeFilePath)) {
+    throw new Error(`Config paths must be relative to the workspace: ${relativeFilePath}`);
+  }
+
+  const workspaceRoot = path.resolve(workspaceFolder);
+  const resolvedPath = path.resolve(workspaceRoot, relativeFilePath);
+  const relativePath = path.relative(workspaceRoot, resolvedPath);
+
+  if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`Config paths must stay inside the workspace: ${relativeFilePath}`);
+  }
+
+  return resolvedPath;
+}
+
 function parseJson(fileContent: string): unknown {
   try {
     return JSON.parse(fileContent) as unknown;
@@ -114,16 +159,16 @@ function parseJson(fileContent: string): unknown {
   }
 }
 
-async function ensureSafePublicDir(publicDir: string): Promise<void> {
+async function ensureSafeDirectory(directoryPath: string): Promise<void> {
   try {
-    const stat = await fs.lstat(publicDir);
+    const stat = await fs.lstat(directoryPath);
 
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      throw new Error(`Refusing to use unsafe public directory: ${publicDir}`);
+      throw new Error(`Refusing to use unsafe config directory: ${directoryPath}`);
     }
   } catch (error: unknown) {
     if (isNodeError(error) && error.code === "ENOENT") {
-      await fs.mkdir(publicDir, { recursive: true });
+      await fs.mkdir(directoryPath, { recursive: true });
       return;
     }
 

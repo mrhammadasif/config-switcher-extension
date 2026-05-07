@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   CONFIG_KIND,
+  type ConfigPaths,
   detectCurrentConfigKind,
   detectConfigFiles,
   getConfigTargetPath,
@@ -50,6 +51,23 @@ describe("config switcher", () => {
     assert.equal(await fs.readFile(getConfigTargetPath(workspaceDir), "utf8"), '{"env":"local"}');
   });
 
+  it("uses custom source and target config paths", async () => {
+    const configPaths: ConfigPaths = {
+      devConfigPath: "env/dev.json",
+      localConfigPath: "env/local.json",
+      targetConfigPath: "runtime/app-config.json",
+    };
+    await fs.mkdir(path.join(workspaceDir, "env"));
+    await fs.writeFile(path.join(workspaceDir, "env", "dev.json"), '{"env":"dev"}');
+    await fs.writeFile(path.join(workspaceDir, "env", "local.json"), '{"env":"local"}');
+
+    const state = await detectConfigFiles(workspaceDir, configPaths);
+    await switchConfig(workspaceDir, CONFIG_KIND.LOCAL, configPaths);
+
+    assert.deepEqual(state, { dev: true, local: true });
+    assert.equal(await fs.readFile(getConfigTargetPath(workspaceDir, configPaths), "utf8"), '{"env":"local"}');
+  });
+
   it("detects local when config.json api.baseUri contains localhost", async () => {
     await fs.writeFile(
       path.join(workspaceDir, "public", "config.json"),
@@ -89,6 +107,32 @@ describe("config switcher", () => {
     await assert.rejects(
       async () => switchConfig(workspaceDir, CONFIG_KIND.DEV),
       /Missing source config: public\/config\.dev\.json/,
+    );
+  });
+
+  it("rejects absolute configured paths", async () => {
+    const configPaths: ConfigPaths = {
+      devConfigPath: path.join(workspaceDir, "config.dev.json"),
+      localConfigPath: "public/config.local.json",
+      targetConfigPath: "public/config.json",
+    };
+
+    await assert.rejects(
+      async () => switchConfig(workspaceDir, CONFIG_KIND.DEV, configPaths),
+      /Config paths must be relative to the workspace/,
+    );
+  });
+
+  it("rejects configured paths outside the workspace", async () => {
+    const configPaths: ConfigPaths = {
+      devConfigPath: "../config.dev.json",
+      localConfigPath: "public/config.local.json",
+      targetConfigPath: "public/config.json",
+    };
+
+    await assert.rejects(
+      async () => switchConfig(workspaceDir, CONFIG_KIND.DEV, configPaths),
+      /Config paths must stay inside the workspace/,
     );
   });
 

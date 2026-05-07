@@ -1,10 +1,13 @@
 import * as vscode from "vscode";
 import {
   CONFIG_KIND,
+  CONFIG_EXTENSION_SECTION,
+  DEFAULT_CONFIG_PATHS,
   detectCurrentConfigKind,
   detectConfigFiles,
   getToggleTargetKind,
   switchConfig,
+  type ConfigPaths,
   type ConfigFileState,
   type ConfigKind,
 } from "./configSwitcher";
@@ -33,6 +36,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void refreshWorkspaceUis(context);
     }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration(CONFIG_EXTENSION_SECTION)) {
+        void Promise.all(workspaceUis.map((workspaceUi) => refreshWorkspaceUi(workspaceUi)));
+      }
+    }),
   );
 }
 
@@ -58,7 +66,7 @@ function createWorkspaceUi(_context: vscode.ExtensionContext, workspaceFolder: v
   };
 
   const watcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(workspaceFolder, "public/config*.json"),
+    new vscode.RelativePattern(workspaceFolder, "**/*.json"),
   );
 
   const workspaceUi: WorkspaceUi = { item, subscriptions: [], watcher, workspaceFolder };
@@ -73,16 +81,29 @@ function createWorkspaceUi(_context: vscode.ExtensionContext, workspaceFolder: v
 }
 
 async function refreshWorkspaceUi(workspaceUi: WorkspaceUi): Promise<void> {
-  const workspacePath = workspaceUi.workspaceFolder.uri.fsPath;
-  const [state, currentKind] = await Promise.all([
-    detectConfigFiles(workspacePath),
-    detectCurrentConfigKind(workspacePath),
-  ]);
+  try {
+    const workspacePath = workspaceUi.workspaceFolder.uri.fsPath;
+    const configPaths = getWorkspaceConfigPaths(workspaceUi.workspaceFolder);
+    const [state, currentKind] = await Promise.all([
+      detectConfigFiles(workspacePath, configPaths),
+      detectCurrentConfigKind(workspacePath, configPaths),
+    ]);
 
-  updateStatusBar(workspaceUi, state, currentKind);
+    updateStatusBar(workspaceUi, state, currentKind, configPaths);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    workspaceUi.item.text = "$(warning) Config";
+    workspaceUi.item.tooltip = `Config Switcher is not available: ${message}`;
+    workspaceUi.item.show();
+  }
 }
 
-function updateStatusBar(workspaceUi: WorkspaceUi, state: ConfigFileState, currentKind: ConfigKind): void {
+function updateStatusBar(
+  workspaceUi: WorkspaceUi,
+  state: ConfigFileState,
+  currentKind: ConfigKind,
+  configPaths: ConfigPaths,
+): void {
   if (!state.dev && !state.local) {
     workspaceUi.item.hide();
     return;
@@ -90,7 +111,7 @@ function updateStatusBar(workspaceUi: WorkspaceUi, state: ConfigFileState, curre
 
   const targetKind = getToggleTargetKind(currentKind);
   workspaceUi.item.text = currentKind === CONFIG_KIND.LOCAL ? "$(home) Local" : "$(cloud) Dev";
-  workspaceUi.item.tooltip = `Current EG config: ${currentKind}. Click to switch to ${targetKind} in ${workspaceUi.workspaceFolder.name}.`;
+  workspaceUi.item.tooltip = `Current config: ${currentKind}. Click to switch to ${targetKind} in ${workspaceUi.workspaceFolder.name}. Target: ${configPaths.targetConfigPath}`;
   workspaceUi.item.show();
 }
 
@@ -103,9 +124,10 @@ async function runToggle(workspaceUri?: vscode.Uri): Promise<void> {
   }
 
   try {
-    const currentKind = await detectCurrentConfigKind(workspaceFolder.uri.fsPath);
+    const configPaths = getWorkspaceConfigPaths(workspaceFolder);
+    const currentKind = await detectCurrentConfigKind(workspaceFolder.uri.fsPath, configPaths);
     const targetKind = getToggleTargetKind(currentKind);
-    await switchConfig(workspaceFolder.uri.fsPath, targetKind);
+    await switchConfig(workspaceFolder.uri.fsPath, targetKind, configPaths);
     await vscode.window.showInformationMessage(`EG config switched to ${targetKind}.`);
     const workspaceUi = workspaceUis.find((ui) => ui.workspaceFolder.uri.toString() === workspaceFolder.uri.toString());
     if (workspaceUi) {
@@ -115,6 +137,16 @@ async function runToggle(workspaceUri?: vscode.Uri): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     await vscode.window.showErrorMessage(`Could not switch EG config: ${message}`);
   }
+}
+
+function getWorkspaceConfigPaths(workspaceFolder: vscode.WorkspaceFolder): ConfigPaths {
+  const configuration = vscode.workspace.getConfiguration(CONFIG_EXTENSION_SECTION, workspaceFolder.uri);
+
+  return {
+    devConfigPath: configuration.get("devConfigPath", DEFAULT_CONFIG_PATHS.devConfigPath),
+    localConfigPath: configuration.get("localConfigPath", DEFAULT_CONFIG_PATHS.localConfigPath),
+    targetConfigPath: configuration.get("targetConfigPath", DEFAULT_CONFIG_PATHS.targetConfigPath),
+  };
 }
 
 function resolveWorkspaceFolder(workspaceUri?: vscode.Uri): vscode.WorkspaceFolder | undefined {

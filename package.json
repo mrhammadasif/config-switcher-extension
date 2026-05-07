@@ -1,8 +1,8 @@
 {
   "name": "config-switcher",
   "displayName": "Config Switcher",
-  "description": "Switch public/config.json between public/config.dev.json and public/config.local.json from the status bar.",
-  "version": "0.1.1",
+  "description": "Switch a configurable JSON file between dev and local source files from the status bar.",
+  "version": "0.2.0",
   "publisher": "eg",
   "license": "MIT",
   "engines": {
@@ -21,8 +21,7 @@
     }
   },
   "activationEvents": [
-    "workspaceContains:public/config.dev.json",
-    "workspaceContains:public/config.local.json",
+    "onStartupFinished",
     "onCommand:egConfigSwitcher.toggle"
   ],
   "main": "./out/src/extension.js",
@@ -32,7 +31,30 @@
         "command": "egConfigSwitcher.toggle",
         "title": "EG Config Switcher: Toggle Config"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Config Switcher",
+      "properties": {
+        "configSwitcher.devConfigPath": {
+          "type": "string",
+          "default": "public/config.dev.json",
+          "scope": "resource",
+          "description": "Workspace-relative path to the dev config source file."
+        },
+        "configSwitcher.localConfigPath": {
+          "type": "string",
+          "default": "public/config.local.json",
+          "scope": "resource",
+          "description": "Workspace-relative path to the local config source file."
+        },
+        "configSwitcher.targetConfigPath": {
+          "type": "string",
+          "default": "public/config.json",
+          "scope": "resource",
+          "description": "Workspace-relative path to the destination config file that will be overwritten."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
