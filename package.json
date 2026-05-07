@@ -1,0 +1,46 @@
+{
+  "name": "eg-config-switcher",
+  "displayName": "EG Config Switcher",
+  "description": "Switch public/config.json between public/config.dev.json and public/config.local.json from the status bar.",
+  "version": "0.0.1",
+  "publisher": "eg",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "This extension writes to public/config.json and should only run in trusted workspaces."
+    }
+  },
+  "activationEvents": [
+    "workspaceContains:public/config.dev.json",
+    "workspaceContains:public/config.local.json",
+    "onCommand:egConfigSwitcher.toggle"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "egConfigSwitcher.toggle",
+        "title": "EG Config Switcher: Toggle Config"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test out/test/**/*.test.js",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.9.3"
+  }
+}
