@@ -1,0 +1,96 @@
+name: Release VSIX
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src/**
+      - test/**
+      - tsconfig.json
+      - .vscodeignore
+      - .github/workflows/release-vsix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release VSIX
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check package version change
+        id: version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+
+            const currentPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const currentVersion = currentPackage.version;
+            const currentName = currentPackage.name;
+            const beforeSha = context.payload.before;
+            const isManual = context.eventName === "workflow_dispatch";
+            const zeroSha = /^0+$/.test(beforeSha ?? "");
+
+            let previousVersion = "";
+            if (!isManual && beforeSha && !zeroSha) {
+              try {
+                const previousPackageJson = execFileSync(
+                  "git",
+                  ["show", `${beforeSha}:package.json`],
+                  { encoding: "utf8" },
+                );
+                previousVersion = JSON.parse(previousPackageJson).version;
+              } catch (error) {
+                core.warning(`Could not read previous package.json: ${error.message}`);
+              }
+            }
+
+            const changed = isManual || previousVersion !== currentVersion;
+            core.setOutput("changed", String(changed));
+            core.setOutput("version", currentVersion);
+            core.setOutput("tag", `v${currentVersion}`);
+            core.setOutput("package_name", currentName);
+
+            if (!changed) {
+              core.notice(`package.json version did not change (${currentVersion}); skipping release.`);
+            }
+
+      - name: Setup Node
+        if: steps.version.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.version.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Test
+        if: steps.version.outputs.changed == 'true'
+        run: npm test
+
+      - name: Package VSIX
+        if: steps.version.outputs.changed == 'true'
+        run: npx --yes @vscode/vsce package --out "${{ steps.version.outputs.package_name }}-${{ steps.version.outputs.version }}.vsix"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
+        run: gh release create "$TAG_NAME" "$PACKAGE_NAME-$VERSION.vsix" --title "$TAG_NAME" --notes "Release $TAG_NAME"
