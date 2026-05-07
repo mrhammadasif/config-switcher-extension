@@ -39,6 +39,8 @@ jobs:
             const currentPackage = JSON.parse(fs.readFileSync("package.json", "utf8"));
             const currentVersion = currentPackage.version;
             const currentName = currentPackage.name;
+            const tag = `v${currentVersion}`;
+            const assetName = `${currentName}-${currentVersion}.vsix`;
             const beforeSha = context.payload.before;
             const isManual = context.eventName === "workflow_dispatch";
             const zeroSha = /^0+$/.test(beforeSha ?? "");
@@ -57,14 +59,33 @@ jobs:
               }
             }
 
-            const changed = isManual || previousVersion !== currentVersion;
-            core.setOutput("changed", String(changed));
+            const versionChanged = previousVersion !== currentVersion;
+            let assetExists = false;
+
+            try {
+              const release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              assetExists = release.data.assets.some((asset) => asset.name === assetName);
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const shouldRelease = isManual || versionChanged || !assetExists;
+            core.setOutput("changed", String(shouldRelease));
             core.setOutput("version", currentVersion);
-            core.setOutput("tag", `v${currentVersion}`);
+            core.setOutput("tag", tag);
+            core.setOutput("asset_name", assetName);
             core.setOutput("package_name", currentName);
 
-            if (!changed) {
-              core.notice(`package.json version did not change (${currentVersion}); skipping release.`);
+            if (!shouldRelease) {
+              core.notice(`Release asset ${assetName} already exists for ${tag}; skipping release.`);
+            } else if (!versionChanged && !isManual) {
+              core.notice(`package.json version did not change, but ${assetName} is missing; retrying release.`);
             }
 
       - name: Setup Node
@@ -84,13 +105,17 @@ jobs:
 
       - name: Package VSIX
         if: steps.version.outputs.changed == 'true'
-        run: npx --yes @vscode/vsce package --out "${{ steps.version.outputs.package_name }}-${{ steps.version.outputs.version }}.vsix"
+        run: npx --yes @vscode/vsce package --out "${{ steps.version.outputs.asset_name }}"
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         if: steps.version.outputs.changed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PACKAGE_NAME: ${{ steps.version.outputs.package_name }}
-        run: gh release create "$TAG_NAME" "$PACKAGE_NAME-$VERSION.vsix" --title "$TAG_NAME" --notes "Release $TAG_NAME"
+          ASSET_NAME: ${{ steps.version.outputs.asset_name }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$ASSET_NAME" --clobber
+          else
+            gh release create "$TAG_NAME" "$ASSET_NAME" --title "$TAG_NAME" --notes "Release $TAG_NAME"
+          fi
