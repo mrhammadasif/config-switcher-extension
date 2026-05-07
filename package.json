@@ -1,12 +1,15 @@
 {
-  "name": "eg-config-switcher",
-  "displayName": "EG Config Switcher",
+  "name": "config-switcher",
+  "displayName": "Config Switcher",
   "description": "Switch public/config.json between public/config.dev.json and public/config.local.json from the status bar.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "eg",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "repository": {
+    "url": "https://github.com/mrhammadasif/config-switcher-extension"
   },
   "categories": [
     "Other"
